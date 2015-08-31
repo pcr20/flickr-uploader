@@ -69,22 +69,34 @@ try:
             parsealbum=parse.parse("[.album:{albumid}]{:s}{fieldstart}",match.group())
             if parsealbum:
                 #then we have an album
+                parse_album_fields=parse.findall("{field}={fieldresult}\n",match.group(),parsealbum.spans["fieldstart"][0])                
+                
                 #check if album exists already, if so skip
                 albumidlist=[z["albumid"] for z in albumsfound]
-                if not parsealbum.named["albumid"] in albumidlist:
+                if parsealbum.named["albumid"] in albumidlist: 
+                    idx=albumidlist.index(parsealbum.named["albumid"]) #duplicate album
+                    
+                    print "duplicate album in: ",os.path.relpath(os.path.join(root, filename),rootPath).replace(os.path.sep, '/'),str(parsealbum.named["albumid"])
+                    
+                    for r in parse_album_fields:
+                        #print r.named
+                        if albumsfound[idx].has_key(r.named["field"]):
+                            if albumsfound[idx][r.named["field"]]!=r.named["fieldresult"]:
+                                print("WARNING: "+r.named["field"]+" was: "+albumsfound[idx][r.named["field"]]+" replaced by: "+r.named["fieldresult"])
+                        albumsfound[idx][r.named["field"]]=r.named["fieldresult"]
+                    
+                else:
                     albumsfound.append({"albumid":parsealbum.named["albumid"]})
-                    parseout2=parse.findall("{field}={fieldresult}\n",match.group(),parsealbum.spans["fieldstart"][0])
+                    parse_album_fields=parse.findall("{field}={fieldresult}\n",match.group(),parsealbum.spans["fieldstart"][0])
                     #print "%s:%s" % (match.start(),match.group())
                     albumsfound[-1]["mtime"]=mtime #storing mtime of .picasa file is not very useful, and rather misleading
                     #albumsfound[-1][".picasa"]=os.path.join(root, filename)
                     albumsfound[-1][".picasa"]=os.path.relpath(os.path.join(root, filename),rootPath).replace(os.path.sep, '/')
                 
-                    for r in parseout2:
+                    for r in parse_album_fields:
                         #print r.named
                         albumsfound[-1][r.named["field"]]=r.named["fieldresult"]
-                else:
-                    print "duplicate album in: ",os.path.relpath(os.path.join(root, filename),rootPath).replace(os.path.sep, '/')
-                            
+  
             elif not (match.group().startswith("[Picasa]") or match.group().startswith("[Contacts]") or match.group().startswith("[Contacts2]") or match.group().startswith("[encoding]")):
                 #a photo
                 parsephoto=parse.parse("[{photofilename}]{:s}{fieldstart}",match.group())
