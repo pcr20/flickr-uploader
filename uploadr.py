@@ -80,6 +80,8 @@ import subprocess
 from sys import stdout
 import itertools
 import re
+import time
+from PIL import Image
 
 ##
 ## Read Config from config.ini file
@@ -482,10 +484,16 @@ class Uploadr:
         con.text_factory = str
         with con:
             cur = con.cursor()
-            cur.execute("SELECT rowid,files_id,path,set_id,md5,tagged,last_modified FROM files WHERE path = ?", (file,))
+            cur.execute("SELECT rowid,files_id,path,set_id,md5,tagged,last_modified,DateTimeOriginal FROM files WHERE path = ?", (file,))
             row = cur.fetchone()
 
             last_modified = os.stat(file).st_mtime;
+            try:
+                tags=Image.open(file)._getexif()
+                DateTimeOriginal = time.mktime(time.strptime(tags[36867],"%Y:%m:%d %H:%M:%S"))                
+            except:
+                DateTimeOriginal = last_modified           
+
             if(row is None):
                 print("Uploading " + file + "...")
                 if FULL_SET_NAME:
@@ -532,13 +540,16 @@ class Uploadr:
                 if (row[6] == None) :
                     cur.execute('UPDATE files SET last_modified = ? WHERE files_id = ?',(last_modified, row[1]))
                     con.commit()
+                if (row[7] == None) :
+                    cur.execute('UPDATE files SET DateTimeOriginal = ? WHERE files_id = ?',(DateTimeOriginal, row[1]))
+                    con.commit()                    
                 if (row[6] != last_modified) :
                     fileMd5 = self.md5Checksum(file)
                     if (fileMd5 != str(row[4])) :
-                        self.replacePhoto(file, row[1], fileMd5, last_modified, cur, con);
+                        self.replacePhoto(file, row[1], fileMd5, last_modified, DateTimeOriginal, cur, con);
             return success
 
-    def replacePhoto ( self, file, file_id, fileMd5, last_modified, cur, con ) :
+    def replacePhoto ( self, file, file_id, fileMd5, last_modified, DateTimeOriginal, cur, con ) :
         success = False
         print("Replacing the file: " + file + "...")
         try:
@@ -556,7 +567,7 @@ class Uploadr:
             if ( not res == "" and res.documentElement.attributes['stat'].value == "ok" ):
                 print("Successfully replaced the file: " + file)
                 # Add to set
-                cur.execute('UPDATE files SET md5 = ?,last_modified = ? WHERE files_id = ?',(fileMd5, last_modified, file_id))
+                cur.execute('UPDATE files SET md5 = ?,last_modified = ?,DateTimeOriginal = ? WHERE files_id = ?',(fileMd5, last_modified, DateTimeOriginal, file_id))
                 con.commit()
                 success = True
             else :
@@ -613,11 +624,11 @@ class Uploadr:
             print(str(sys.exc_info()))
         return success
 
-    def logSetCreation( self, setId, setName, primaryPhotoId, cur, con):
+    def logSetCreation( self, setId, setName, primaryPhotoId, album_time, cur, con):
         print("adding set to log: " + str(setName))
 
         success = False
-        cur.execute("INSERT INTO sets (set_id, name, primary_photo_id) VALUES (?,?,?)", (setId,setName,primaryPhotoId))
+        cur.execute("INSERT INTO sets (set_id, name, primary_photo_id, album_time) VALUES (?,?,?,?)", (setId,setName,primaryPhotoId,album_time))
         cur.execute("UPDATE files SET set_id = ? WHERE files_id = ?", (setId, primaryPhotoId))
         con.commit()
         return True
@@ -722,6 +733,8 @@ class Uploadr:
             files = cur.fetchall()
 
             for row in files:
+                st = os.stat(os.path.dirname(row[1]))
+                album_time = st.st_mtime
                 if FULL_SET_NAME:
                     setName = os.path.relpath(os.path.dirname(row[1]), FILES_DIR)
                 else:
@@ -733,11 +746,13 @@ class Uploadr:
                 set = cur.fetchone()
 
                 if set == None:
-                    setId = self.createSet(setName, row[0], cur, con)
+                    setId = self.createSet(setName, row[0], album_time, cur, con)
                     print("Created the set: " + setName)
                     newSetCreated = True
                 else :
                     setId = set[0]
+                    #update album time in database
+                    cur.execute("UPDATE sets SET album_time = ? WHERE set_id = ?", (album_time,setId))
 
                 if row[2] == None and newSetCreated == False :
                     print "adding file to set " + row[1]
@@ -774,7 +789,7 @@ class Uploadr:
                         head, setName = os.path.split(os.path.dirname(file[1]))
                     con = lite.connect(DB_PATH)
                     con.text_factory = str
-                    self.createSet( setName, file[0], cur, con)
+                    self.createSet( setName, file[0], None, cur, con)
                 elif ( res['code'] == 3 ) :
                     print(res['message'] + "... updating DB")
                     cur.execute("UPDATE files SET set_id = ? WHERE files_id = ?", (setId, file[0]))
@@ -782,8 +797,102 @@ class Uploadr:
                     self.reportError( res )
         except:
             print(str(sys.exc_info()))
+            
+    def sortSets( self ):
+        print('*****Sorting Sets*****')
 
-    def createSet( self, setName, primaryPhotoId, cur, con):
+        con = lite.connect(DB_PATH)
+        con.text_factory = str
+        with con:
+
+            cur = con.cursor()
+            cur.execute("SELECT set_id, name FROM sets ORDER BY album_time DESC")
+
+            photoSets = cur.fetchall()
+            sets_id_order_str=""
+            
+            for photoSet in photoSets:
+
+                cur.execute("SELECT files_id FROM files WHERE set_id = ? ORDER BY DateTimeOriginal ASC",(photoSet[0],))
+
+                files_id_order = cur.fetchall()
+
+                #print "For photoSet: " + str(photoSet[0]) + " sort order is: "
+                #print files_id_order
+                files_id_order_str=""
+                for k in files_id_order:
+                    if files_id_order_str:
+                        #string not empty
+                        files_id_order_str=files_id_order_str + "," + str(k[0])
+                    else:
+                        #string empty - ie first run through
+                        files_id_order_str=str(k[0])
+                        
+                self.sortSet( photoSet[0], photoSet[1], files_id_order_str, cur, con)       
+
+                if sets_id_order_str:
+                    #string not empty
+                    sets_id_order_str=sets_id_order_str + "," + str(photoSet[0])
+                else:
+                    #string empty - ie first run through
+                    sets_id_order_str=str(photoSet[0])                
+                    
+            self.orderSets(sets_id_order_str, cur, con)                 
+
+        print('*****Completed sorting and reordering sets*****')
+        
+    def sortSet( self, setId, setName, files_id_order_str, cur, con):
+    #not used yet
+        try:
+            d = {
+                "auth_token"          : str(self.token),
+                "perms"               : str(self.perms),
+                "format"              : "json",
+                "nojsoncallback"      : "1",
+                "method"              : "flickr.photosets.reorderPhotos",
+                "photoset_id"         : str( setId ),
+                "photo_ids"           : files_id_order_str #comma separated list of photo_ids
+            }
+            sig = self.signCall( d )
+            url = self.urlGen( api.rest, d, sig )
+
+            res = self.getResponse( url )
+            if ( self.isGood( res ) ):
+
+                print("Successfully reordered photoset " + str(setId) + " " + setName)
+
+            else :
+
+                self.reportError( res )
+        except:
+            print(str(sys.exc_info()))
+
+    def orderSets( self, sets_id_order_str, cur, con):
+    #not used yet
+        try:
+            d = {
+                "auth_token"          : str(self.token),
+                "perms"               : str(self.perms),
+                "format"              : "json",
+                "nojsoncallback"      : "1",
+                "method"              : "flickr.photosets.orderSets",
+                "photoset_ids"        : sets_id_order_str #comma separated list of photoset_ids
+            }
+            sig = self.signCall( d )
+            url = self.urlGen( api.rest, d, sig )
+
+            res = self.getResponse( url )
+            if ( self.isGood( res ) ):
+
+                print("Successfully ordered photosets")
+
+            else :
+
+                self.reportError( res )
+        except:
+            print(str(sys.exc_info()))
+            
+    def createSet( self, setName, primaryPhotoId, album_time, cur, con):
         print("Creating new set: " + str(setName))
 
         try:
@@ -804,7 +913,7 @@ class Uploadr:
             url = self.urlGen( api.rest, d, sig )
             res = self.getResponse( url )
             if ( self.isGood( res ) ):
-                self.logSetCreation( res["photoset"]["id"], setName, primaryPhotoId, cur, con )
+                self.logSetCreation( res["photoset"]["id"], setName, primaryPhotoId, album_time, cur, con )
                 return res["photoset"]["id"]
             else :
                 print(d)
@@ -833,6 +942,18 @@ class Uploadr:
                 cur = con.cursor()
                 cur.execute('PRAGMA user_version="1"')
                 cur.execute('ALTER TABLE files ADD COLUMN last_modified REAL');
+                con.commit()
+            if (row[0] == 1) :
+                print('Adding DateTimeOriginal column to database');
+                cur = con.cursor()
+                cur.execute('PRAGMA user_version="2"')
+                cur.execute('ALTER TABLE files ADD COLUMN DateTimeOriginal REAL');
+                con.commit()
+            if (row[0] == 2) :
+                print('Adding album_time column to database');
+                cur = con.cursor()
+                cur.execute('PRAGMA user_version="3"')
+                cur.execute('ALTER TABLE sets ADD COLUMN album_time REAL');
                 con.commit()
             con.close()
         except lite.Error, e:
@@ -867,7 +988,7 @@ class Uploadr:
             files = cur.fetchall()
 
             for row in files:
-                if(row[3] != 1) :
+                if(row[3] != 1) : #row[3] is the tagged field
                     if FULL_SET_NAME:
                         setName = os.path.relpath(os.path.dirname(row[1]), FILES_DIR)
                     else:
@@ -1020,5 +1141,6 @@ if __name__ == "__main__":
         flick.upload()
         flick.removeDeletedMedia()
         flick.createSets()
+        flick.sortSets()        
         flick.addTagsToUploadedPhotos()
 print("--------- End time: " + time.strftime("%c") + " ---------");
