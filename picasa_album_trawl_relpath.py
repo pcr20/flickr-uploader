@@ -14,6 +14,7 @@ import traceback
 import sys
 import shutil
 import time
+import sqlite3 as lite
 from PIL import Image
 
 #rootPath = 'I:\\Documents and Settings\\pcr20\\My Documents\\My Pictures'
@@ -30,13 +31,31 @@ picasablock = re.compile("\[[^\[]*")
 import ConfigParser
 config = ConfigParser.ConfigParser()
 config.read(os.path.join(os.path.dirname(sys.argv[0]), "picasaTrawl.ini"))
+configUploadr = ConfigParser.ConfigParser()
+configUploadr.read(os.path.join(os.path.dirname(sys.argv[0]), "uploadr.ini"))
 
 EXCLUDED_FOLDERS = eval(config.get('Config','EXCLUDED_FOLDERS'))
 PICASA_INI_FILES  = eval(config.get('Config','PICASA_INI_FILES'))
 albumPath = eval(config.get('Config','ALBUM_PATH'))
 rootPath = eval(config.get('Config','ROOT_PATH'))
+DB_PATH = eval(config.get('Config','DB_PATH'))
+FLICKR = eval(configUploadr.get('Config','FLICKR'))
+is_public_default=int(FLICKR["is_public"])
+is_friend_default=int(FLICKR["is_friend"])
+is_family_default=int(FLICKR["is_family"])
 
+ispublicre = re.compile("(\s*)(?:ispublic)(?:\s*)=(?:\s*)([0-9]+)(?:\s*)")
+isfamilyre = re.compile("(\s*)(?:isfamily)(?:\s*)=(?:\s*)([0-9]+)(?:\s*)")
+isfriendre = re.compile("(\s*)(?:isfriend)(?:\s*)=(?:\s*)([0-9]+)(?:\s*)")
 
+if os.path.isfile(DB_PATH):
+    os.remove(DB_PATH)
+con = lite.connect(DB_PATH)
+con.text_factory = str
+cur = con.cursor()
+cur.execute('create table if not exists albums (name text, albumtime REAL, isfamily INTEGER, isfriend INTEGER, ispublic INTEGER)')
+cur.execute('create index if not exists setsindex on albums (name)')
+con.commit()
 
 try:
 
@@ -71,7 +90,7 @@ try:
                 #then we have an album
                 parse_album_fields=parse.findall("{field}={fieldresult}\n",match.group(),parsealbum.spans["fieldstart"][0])                
                 
-                #check if album exists already, if so skip
+                #check if album exists already
                 albumidlist=[z["albumid"] for z in albumsfound]
                 if parsealbum.named["albumid"] in albumidlist: 
                     idx=albumidlist.index(parsealbum.named["albumid"]) #duplicate album
@@ -96,6 +115,54 @@ try:
                     for r in parse_album_fields:
                         #print r.named
                         albumsfound[-1][r.named["field"]]=r.named["fieldresult"]
+                #parse description field for permissions
+                albumidlist=[z["albumid"] for z in albumsfound]
+                idx=albumidlist.index(parsealbum.named["albumid"])
+                ispublic=is_public_default
+                isfriend=is_friend_default
+                isfamily=is_family_default                
+                if albumsfound[idx].has_key("description"):
+                    #regex to find isfamily[any whitespace]=[any whitespace][at least one number digit][non number digit or eof]
+                    description=albumsfound[idx]["description"]
+                    ispublicfound = re.search(ispublicre,description)
+                    isfriendfound = re.search(isfriendre,description)
+                    isfamilyfound = re.search(isfamilyre,description)
+
+                    startidx=len(description)
+                    endidx=0
+                    if ispublicfound:
+                        if startidx>ispublicfound.start(1):
+                            startidx=ispublicfound.start(1)
+                        ispublic=int(ispublicfound.group(2))
+                        if endidx<ispublicfound.end(2):
+                            endidx=ispublicfound.end(2)
+
+                    if isfriendfound:
+                        if startidx>isfriendfound.start(1):
+                            startidx=isfriendfound.start(1)    
+                        isfriend=int(isfriendfound.group(2))
+                        if endidx<isfriendfound.end(2):
+                            endidx=isfriendfound.end(2)
+
+                    if isfamilyfound:
+                        if startidx>isfamilyfound.start(1):
+                            startidx=isfamilyfound.start(1)
+                        isfamily=int(isfamilyfound.group(2))
+                        if endidx<isfamilyfound.end(2):
+                            endidx=isfamilyfound.end(2)
+                    if albumsfound[idx].has_key("ispublic"):
+                        if albumsfound[idx]["ispublic"]!=ispublic:
+                            print("WARNING: ispublic was: "+str(albumsfound[idx]["ispublic"])+" replaced by: "+str(ispublic))
+                    if albumsfound[idx].has_key("isfriend"):
+                        if albumsfound[idx]["isfriend"]!=isfriend:
+                            print("WARNING: isfriend was: "+str(albumsfound[idx]["isfriend"])+" replaced by: "+str(isfriend))
+                    if albumsfound[idx].has_key("isfamily"):
+                        if albumsfound[idx]["isfamily"]!=isfamily:
+                            print("WARNING: isfamily was: "+str(albumsfound[idx]["isfamily"])+" replaced by: "+str(isfamily))
+                    albumsfound[idx]["description"]=description[:startidx]+description[endidx:] #remove meta data from description
+                albumsfound[idx]["ispublic"]=ispublic
+                albumsfound[idx]["isfriend"]=isfriend
+                albumsfound[idx]["isfamily"]=isfamily                
   
             elif not (match.group().startswith("[Picasa]") or match.group().startswith("[Contacts]") or match.group().startswith("[Contacts2]") or match.group().startswith("[encoding]")):
                 #a photo
@@ -164,10 +231,12 @@ try:
         #revert folder time to album time
         timesForTuple=albumcontents[album["albumid"]]["DateTimeOriginal"]
         os.utime(thisAlbumPath,(timesForTuple,timesForTuple)) #set directory time to album time
+        cur.execute('INSERT INTO albums (name, albumtime, isfamily, isfriend, ispublic) VALUES (?, ?, ?, ?, ?)',(album["name"],float(timesForTuple),album["isfamily"],album["isfriend"],album["ispublic"]))
+
     else:
         albumsfound.pop(idx) #remove item because the album is empty
                 
-
+ con.commit()  
  print numPhotosInAlbums," photos in ",len(albumsfound)," albums found (not all photos may be unique)"
  print albumsfound
  print albumcontents

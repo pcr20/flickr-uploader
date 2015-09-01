@@ -95,6 +95,7 @@ FLICKR = eval(config.get('Config','FLICKR'))
 SLEEP_TIME = eval(config.get('Config','SLEEP_TIME'))
 DRIP_TIME = eval(config.get('Config','DRIP_TIME'))
 DB_PATH = eval(config.get('Config','DB_PATH'))
+DB_PATH_PICASA = eval(config.get('Config','DB_PATH_PICASA'))
 LOCK_PATH = eval(config.get('Config','LOCK_PATH'))
 TOKEN_PATH = eval(config.get('Config','TOKEN_PATH'))
 EXCLUDED_FOLDERS = eval(config.get('Config','EXCLUDED_FOLDERS'))
@@ -868,7 +869,6 @@ class Uploadr:
             print(str(sys.exc_info()))
 
     def orderSets( self, sets_id_order_str, cur, con):
-    #not used yet
         try:
             d = {
                 "auth_token"          : str(self.token),
@@ -1028,6 +1028,67 @@ class Uploadr:
         except:
             print(str(sys.exc_info()))
         return False
+        
+    def setPhotosPermissions ( self ) :
+        print('*****Setting permissions for existing photos*****')
+
+        con = lite.connect(DB_PATH)
+        con.text_factory = str
+
+        conpic = lite.connect(DB_PATH_PICASA)
+        conpic.text_factory = str        
+        
+        with (con and conpic):
+
+            cur = con.cursor()
+            cur.execute("SELECT files_id, path, set_id FROM files")
+            curpic = conpic.cursor()
+
+            files = cur.fetchall()
+            coun = 0
+            for row in files:
+                cur.execute("SELECT name FROM sets WHERE set_id = ?",(row[2],))
+                setinfo = cur.fetchone()
+                curpic.execute("SELECT ispublic, isfriend, isfamily FROM albums WHERE name = ?",(setinfo[0],))
+                setinfo = curpic.fetchone()
+                status = self.setPhotoPermissions(row, setinfo[0], setinfo[1], setinfo[2], cur, con)
+
+                if status == False:
+                    print("Error: cannot set permissions for file: " + row[1])
+                coun = coun + 1;
+                if (coun%100 == 0):
+                    print("   " + str(coun) + " files processed (permissions set)")
+            if (coun%100 > 0):
+                print("   " + str(coun) + " files processed (permissions set)")                    
+
+        print('*****Completed setting permissions*****')
+
+    def setPhotoPermissions(self, file, isPublic, isFriend, isFamily, cur, con) :
+        try:
+            d = {
+                "auth_token"          : str(self.token),
+                "perms"               : str(self.perms),
+                "format"              : "json",
+                "nojsoncallback"      : "1",
+                "method"              : "flickr.photos.setPerms",
+                "photo_id"            : str( file[0] ),
+                "is_public"           : str(isPublic),
+                "is_friend"           : str(isFriend),
+                "is_family"           : str(isFamily)                
+                
+            }
+            sig = self.signCall( d )
+            url = self.urlGen( api.rest, d, sig )
+
+            res = self.getResponse( url )
+            if (not self.isGood( res ) ):
+                print(d)
+                self.reportError( res )
+                return False
+        except:
+            print(str(sys.exc_info()))
+            return False
+        return True
 
     # Method to clean unused sets
     def removeUselessSetsTable( self ) :
@@ -1141,6 +1202,7 @@ if __name__ == "__main__":
         flick.upload()
         flick.removeDeletedMedia()
         flick.createSets()
-        flick.sortSets()        
+        flick.sortSets()
+        flick.setPhotosPermissions()        
         flick.addTagsToUploadedPhotos()
 print("--------- End time: " + time.strftime("%c") + " ---------");
