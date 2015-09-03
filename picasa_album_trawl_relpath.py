@@ -211,6 +211,8 @@ try:
 
  #update album mtime to be the later of the date that the album was created and the date that a photo was added to the album
  numPhotosInAlbums=0
+
+ delidx=[]
  for idx,album in enumerate(albumsfound):
     if album["albumid"] in albumcontents.keys():
         if album["mtime"]<albumcontents[album["albumid"]]["mtime"]:
@@ -223,7 +225,7 @@ try:
         else:
           thisAlbumPath=os.path.join(albumPath,album["albumid"])
         os.mkdir(thisAlbumPath)
-
+        print "Created :"+thisAlbumPath
         
         for photofilename in albumcontents[album["albumid"]]["photos"]:
             os.link(os.path.join(rootPath,photofilename),os.path.join(thisAlbumPath,os.path.basename(photofilename)))
@@ -234,11 +236,17 @@ try:
         cur.execute('INSERT INTO albums (name, albumtime, isfamily, isfriend, ispublic) VALUES (?, ?, ?, ?, ?)',(album["name"],float(timesForTuple),album["isfamily"],album["isfriend"],album["ispublic"]))
 
     else:
-        albumsfound.pop(idx) #remove item because the album is empty
-                
- con.commit()  
- print numPhotosInAlbums," photos in ",len(albumsfound)," albums found (not all photos may be unique)"
- print albumsfound
+        delidx.append(idx) #remove item because the album is empty
+        print album["albumid"]+" removed"
+
+ #now remove delted indices
+ con.commit() 
+ 
+ Idx = set(range(0,len(albumsfound)))-set(delidx)
+ albumsfoundfinal = [albumsfound[i] for i in Idx]  
+ 
+ print numPhotosInAlbums," photos in ",len(albumsfoundfinal)," albums found (not all photos may be unique)"
+ print albumsfoundfinal
  print albumcontents
 
 

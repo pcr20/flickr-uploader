@@ -527,7 +527,7 @@ class Uploadr:
                     if ( not res == "" and res.documentElement.attributes['stat'].value == "ok" ):
                         print("Successfully uploaded the file: " + file)
                         # Add to set
-                        cur.execute('INSERT INTO files (files_id, path, md5, last_modified, tagged) VALUES (?, ?, ?, ?, 1)',(int(str(res.getElementsByTagName('photoid')[0].firstChild.nodeValue)), file, self.md5Checksum(file),last_modified))
+                        cur.execute('INSERT INTO files (files_id, path, md5, last_modified, tagged, DateTimeOriginal) VALUES (?, ?, ?, ?, 1, ?)',(int(str(res.getElementsByTagName('photoid')[0].firstChild.nodeValue)), file, self.md5Checksum(file),last_modified,DateTimeOriginal))
                         success = True
                     else :
                         print("A problem occurred while attempting to upload the file: " + file)
@@ -933,6 +933,10 @@ class Uploadr:
             cur.execute('create table if not exists sets (set_id int, name text, primary_photo_id INTEGER)')
             cur.execute('create unique index if not exists fileindex on files (path)')
             cur.execute('create index if not exists setsindex on sets (name)')
+            cur.execute('drop table if exists flickr')
+            con.commit()           
+            cur.execute('create table flickr (photoid int, filename text, isfriend int, isfamily int, ispublic int)')
+            cur.execute('create unique index photoididx on flickr (photoid)')            
             con.commit()
             cur = con.cursor()
             cur.execute('PRAGMA user_version')
@@ -955,6 +959,13 @@ class Uploadr:
                 cur.execute('PRAGMA user_version="3"')
                 cur.execute('ALTER TABLE sets ADD COLUMN album_time REAL');
                 con.commit()
+            if (row[0] == 3) :                
+                print('Adding flickr table to database');
+                cur = con.cursor()
+                cur.execute('PRAGMA user_version="4"')
+
+                con.commit()                
+               
             con.close()
         except lite.Error, e:
             print("Error: %s" % e.args[0])
@@ -1155,6 +1166,52 @@ class Uploadr:
             print(str(sys.exc_info()))
         print('*****Completed adding Flickr Sets to DB*****')
 
+    # Get sets from Flickr
+    def getAllPhotos(self):
+        print('*****Getting all photos from Flickr*****')
+        con = lite.connect(DB_PATH)
+        con.text_factory = str
+        try:
+
+            nPage = 1
+            while True:
+                d = {
+                    "auth_token"          : str(self.token),
+                    "perms"               : str(self.perms),
+                    "format"              : "json",
+                    "nojsoncallback"      : "1",
+                    "method"              : "flickr.people.getPhotos",
+                    "user_id"             : "me",
+                    "extras"              : "date_taken",
+                    "per_page"            : "500",
+                    "page"                : "1"                
+                }
+                d["page"]=str(nPage)
+                url = self.urlGen(api.rest, d, self.signCall(d))
+                res = self.getResponse(url)
+                if (self.isGood(res)):
+                    total = int(str(res['photos']['total']))
+                    print("Getting photos "+str((nPage-1)*500+1)+" to "+str(max(nPage*500,total))+" of "+str(total))
+                    #print res['photos']['pages']
+                    cur = con.cursor()
+                    for row in res['photos']['photo']:
+                        cur.execute("INSERT INTO flickr (photoid, filename, isfriend, isfamily, ispublic) VALUES (?,?,?,?,?)", (int(row['id']), row['title'], int(row['isfriend']), int(row['isfamily']), int(row['ispublic'])))
+
+                    if int(res['photos']['page'])<int(res['photos']['pages']):
+                        nPage=nPage+1
+                    else:
+                        break
+                else:
+                    print(d)
+                    self.reportError(res)
+                    break
+            con.commit()
+            con.close()
+
+        except:
+            print(str(sys.exc_info()))
+        print('*****Completed getting all photos from Flickr*****')        
+        
 print("--------- Start time: " + time.strftime("%c") + " ---------");
 if __name__ == "__main__":
     # Ensure that only once instance of this script is running
@@ -1205,4 +1262,5 @@ if __name__ == "__main__":
         flick.sortSets()
         flick.setPhotosPermissions()        
         flick.addTagsToUploadedPhotos()
+        flick.getAllPhotos()
 print("--------- End time: " + time.strftime("%c") + " ---------");
