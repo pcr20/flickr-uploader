@@ -1191,7 +1191,7 @@ class Uploadr:
                 res = self.getResponse(url)
                 if (self.isGood(res)):
                     total = int(str(res['photos']['total']))
-                    print("Getting photos "+str((nPage-1)*500+1)+" to "+str(max(nPage*500,total))+" of "+str(total))
+                    print("Getting photos "+str((nPage-1)*500+1)+" to "+str(min(nPage*500,total))+" of "+str(total))
                     #print res['photos']['pages']
                     cur = con.cursor()
                     for row in res['photos']['photo']:
