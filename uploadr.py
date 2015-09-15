@@ -839,7 +839,8 @@ class Uploadr:
                     sets_id_order_str=str(photoSet[0])                
                     
             self.orderSets(sets_id_order_str, cur, con)                 
-
+            sys.stderr.write("Ordered "+len(photoSets) +" photosets\n")            
+            
         print('*****Completed sorting and reordering sets*****')
         
     def sortSet( self, setId, setName, files_id_order_str, cur, con):
@@ -1071,7 +1072,7 @@ class Uploadr:
                     print("   " + str(coun) + " files processed (permissions set)")
             if (coun%100 > 0):
                 print("   " + str(coun) + " files processed (permissions set)")                    
-
+        sys.stderr.write("Permissions set on "+str(coun) +" photos\n")
         print('*****Completed setting permissions*****')
 
     def setPhotoPermissions(self, file, isPublic, isFriend, isFamily, cur, con) :
@@ -1207,10 +1208,56 @@ class Uploadr:
                     break
             con.commit()
             con.close()
-
+            sys.stderr.write(str(total)+" photos currently in Flickr\n")
+            
         except:
             print(str(sys.exc_info()))
         print('*****Completed getting all photos from Flickr*****')        
+
+       
+    def deleteFlickrFile( self, filename,photoid, cur ):
+        success = False
+        print("Deleting file: " + filename)
+
+        try:
+            d = {
+                "auth_token"      : str(self.token),
+                "perms"           : str(self.perms),
+                "format"          : "rest",
+                "method"          : "flickr.photos.delete",
+                "photo_id"        : str(photoid),
+                "format"          : "json",
+                "nojsoncallback"  : "1"
+            }
+            sig = self.signCall( d )
+            url = self.urlGen( api.rest, d, sig )
+            res = self.getResponse( url )
+            if ( self.isGood( res ) ):
+
+                # Delete file record from the local db
+                cur.execute("DELETE FROM flickr WHERE photoid = ?", (photoid,))
+                print("Successful deletion.")
+                success = True
+            else :
+                self.reportError( res )
+        except:
+            # If you get 'attempt to write a readonly database', set 'admin' as owner of the DB file (fickerdb) and 'users' as group
+            print(str(sys.exc_info()))
+        return success
+
+    def deleteFlickrExtraFiles( self):
+        print('*****Deleting photos on Flickr which are not in local db*****')
+        con = lite.connect(DB_PATH)
+        con.text_factory = str     
+        cur = con.cursor()
+        cur.execute("SELECT filename, photoid FROM flickr WHERE photoid NOT IN (SELECT files_id FROM files)")
+        photostodelete = cur.fetchall()
+        for row in photostodelete:
+            self.deleteFlickrFile(row[0],row[1],cur)
+        
+        con.commit()
+        con.close()
+
         
 print("--------- Start time: " + time.strftime("%c") + " ---------");
 if __name__ == "__main__":
@@ -1263,4 +1310,6 @@ if __name__ == "__main__":
         flick.setPhotosPermissions()        
         flick.addTagsToUploadedPhotos()
         flick.getAllPhotos()
+        flick.deleteFlickrExtraFiles()
+        
 print("--------- End time: " + time.strftime("%c") + " ---------");

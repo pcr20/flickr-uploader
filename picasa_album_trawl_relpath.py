@@ -222,6 +222,11 @@ try:
         #create directory for this album
         if "name" in album.keys():
           thisAlbumPath=os.path.join(albumPath,album["name"])
+          if os.path.isdir(thisAlbumPath):
+            print("WARNING: "+thisAlbumPath+" already exists,using "+os.path.join(albumPath,album["albumid"])+" instead")
+            thisAlbumPath=os.path.join(albumPath,album["albumid"])
+            #if the directory already exists, this is because the directory name is not unique
+            #in this case, use the albumid as the dirname (which is guarenteed to be unique)
         else:
           thisAlbumPath=os.path.join(albumPath,album["albumid"])
         os.mkdir(thisAlbumPath)
@@ -246,6 +251,7 @@ try:
  albumsfoundfinal = [albumsfound[i] for i in Idx]  
  
  print numPhotosInAlbums," photos in ",len(albumsfoundfinal)," albums found (not all photos may be unique)"
+ sys.stderr.write(str(numPhotosInAlbums)+" photos in "+str(len(albumsfoundfinal))+" albums found (not all photos may be unique)\n")
  print albumsfoundfinal
  print albumcontents
 
